@@ -337,6 +337,9 @@ async def main():
 	print(f'[INFO] Found {len(accounts)} account configurations')
 
 	last_balance_hash = load_balance_hash()
+	always_notify = os.getenv('CHECKIN_NOTIFY_ALWAYS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+	if always_notify:
+		print('[NOTIFY] CHECKIN_NOTIFY_ALWAYS is enabled, will send notification after this run')
 
 	success_count = 0
 	total_count = len(accounts)
@@ -432,7 +435,11 @@ async def main():
 			print('[INFO] No balance changes detected')
 
 	# 为有余额变化的情况添加所有成功账号到通知内容
-	if balance_changed:
+	if balance_changed or always_notify:
+		if always_notify and not balance_changed:
+			need_notify = True
+			print('[NOTIFY] Forced notification enabled, will send current check-in result')
+
 		for i, account in enumerate(accounts):
 			account_key = f'account_{i + 1}'
 			if account_key in account_check_in_details:
@@ -445,6 +452,9 @@ async def main():
 				# 检查是否已经在通知内容中（避免重复）
 				if not any(account_name in item for item in notification_content):
 					notification_content.append(account_result)
+
+		if always_notify and not notification_content:
+			notification_content.append('[INFO] Check-in completed, but no account balance details were available.')
 
 	# 保存当前余额hash
 	if current_balance_hash:

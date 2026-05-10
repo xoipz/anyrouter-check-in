@@ -5,6 +5,8 @@ from typing import Literal
 
 import httpx
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
 
 class NotificationKit:
 	def __init__(self):
@@ -22,8 +24,8 @@ class NotificationKit:
 		self.gotify_token = os.getenv('GOTIFY_TOKEN')
 		gotify_priority_env = os.getenv('GOTIFY_PRIORITY', '9')
 		self.gotify_priority = int(gotify_priority_env) if gotify_priority_env.strip() else 9
-		self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-		self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+		self.telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+		self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID', '').strip()
 		self.bark_key = os.getenv('BARK_KEY')
 		self.bark_server = os.getenv('BARK_SERVER', 'https://api.day.app')
 
@@ -112,11 +114,24 @@ class NotificationKit:
 		if not self.telegram_bot_token or not self.telegram_chat_id:
 			raise ValueError('Telegram Bot Token or Chat ID not configured')
 
-		message = f'<b>{title}</b>\n\n{content}'
-		data = {'chat_id': self.telegram_chat_id, 'text': message, 'parse_mode': 'HTML'}
+		message = f'{title}\n\n{content}'
 		url = f'https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage'
 		with httpx.Client(timeout=30.0) as client:
-			client.post(url, json=data)
+			for index, chunk in enumerate(self._split_telegram_message(message), start=1):
+				data = {'chat_id': self.telegram_chat_id, 'text': chunk}
+				response = client.post(url, json=data)
+				response.raise_for_status()
+				result = response.json()
+				if not result.get('ok'):
+					description = result.get('description', 'Unknown Telegram API error')
+					raise ValueError(f'Telegram API returned ok=false on chunk {index}: {description}')
+
+	def _split_telegram_message(self, message: str) -> list[str]:
+		"""Split Telegram messages to avoid the 4096 character API limit."""
+		if len(message) <= TELEGRAM_MESSAGE_LIMIT:
+			return [message]
+
+		return [message[i : i + TELEGRAM_MESSAGE_LIMIT] for i in range(0, len(message), TELEGRAM_MESSAGE_LIMIT)]
 
 	def send_bark(self, title: str, content: str):
 		if not self.bark_key:
@@ -136,7 +151,7 @@ class NotificationKit:
 		with httpx.Client(timeout=30.0) as client:
 			client.post(url, json=data)
 
-	def push_message(self, title: str, content: str, msg_type: Literal['text', 'html'] = 'text'):
+	def push_message(self, title: str, content: str, msg_type: Literal['text', 'html'] = 'text') -> bool:
 		notifications = [
 			('Email', lambda: self.send_email(title, content, msg_type)),
 			('PushPlus', lambda: self.send_pushplus(title, content)),
@@ -149,12 +164,16 @@ class NotificationKit:
 			('Bark', lambda: self.send_bark(title, content)),
 		]
 
+		success_count = 0
 		for name, func in notifications:
 			try:
 				func()
+				success_count += 1
 				print(f'[{name}]: Message push successful!')
 			except Exception as e:
 				print(f'[{name}]: Message push failed! Reason: {str(e)}')
+
+		return success_count > 0
 
 
 notify = NotificationKit()

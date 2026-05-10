@@ -1,0 +1,79 @@
+name: Test Telegram Notification
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: Telegram test message body
+        required: false
+        default: Manual Telegram notification test from anyrouter-check-in.
+
+jobs:
+  test-telegram:
+    runs-on: windows-2025
+    environment: production
+    env:
+      PYTHONIOENCODING: utf-8
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: 缓存 UV 依赖
+        uses: actions/cache@v5
+        id: uv-cache
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: 安装依赖
+        if: steps.uv-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "缓存未命中，开始安装项目依赖..."
+          uv sync
+          echo "✅ 环境初始化完成"
+
+      - name: 验证 Telegram 配置
+        run: |
+          if (-not $env:TELEGRAM_BOT_TOKEN) {
+            Write-Error "TELEGRAM_BOT_TOKEN secret is not configured"
+          }
+          if (-not $env:TELEGRAM_CHAT_ID) {
+            Write-Error "TELEGRAM_CHAT_ID secret is not configured"
+          }
+          echo "Telegram secrets are configured."
+
+      - name: 发送 Telegram 测试通知
+        env:
+          TEST_MESSAGE: ${{ inputs.message }}
+        run: |
+          @'
+          import os
+          from datetime import datetime
+
+          from utils.notify import NotificationKit
+
+          title = 'AnyRouter Telegram Test'
+          content = '\n'.join([
+              os.getenv('TEST_MESSAGE') or 'Manual Telegram notification test.',
+              f'Repository: ${{ github.repository }}',
+              f'Workflow: ${{ github.workflow }}',
+              f'Run ID: ${{ github.run_id }}',
+              f'Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+          ])
+
+          NotificationKit().send_telegram(title, content)
+          print('Telegram test notification sent successfully.')
+          '@ | uv run python -
